@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --no-dev
+
+      - name: Run ruff check
+        run: uv run ruff check python/ tests/ examples/
+
+      - name: Run ruff format check
+        run: uv run ruff format --check python/ tests/ examples/
+
+      - name: Run cargo fmt check
+        run: cargo fmt --all -- --check
+
+      - name: Run cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Copy Steam SDK library (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          STEAM_LIB=$(find ~/.cargo/registry/src -name "libsteam_api.so" -path "*/linux64/*" | head -1)
+          if [ -n "$STEAM_LIB" ]; then
+            cp "$STEAM_LIB" python/arepy_steamworks/
+          fi
+
+      - name: Copy Steam SDK library (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          STEAM_LIB=$(find ~/.cargo/registry/src -name "libsteam_api.dylib" -path "*/osx/*" | head -1)
+          if [ -n "$STEAM_LIB" ]; then
+            cp "$STEAM_LIB" python/arepy_steamworks/
+          fi
+
+      - name: Copy Steam SDK library (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $steamLib = Get-ChildItem -Path "$env:USERPROFILE\.cargo\registry\src" -Recurse -Filter "steam_api64.dll" -Path "*win64*" | Select-Object -First 1
+          if ($steamLib) {
+            Copy-Item $steamLib.FullName -Destination "python\arepy_steamworks\"
+          }
+
+      - name: Build with maturin
+        run: uv run maturin build --release
+
+      - name: Run tests
+        run: uv run pytest tests/ -v
+        env:
+          STEAM_APPID: 480
