@@ -16,7 +16,7 @@
 //! ## GIL Management
 //!
 //! Operations that may block (network calls, callbacks) release the Python GIL
-//! using `py.allow_threads()` to prevent blocking other Python threads.
+//! using `py.detach()` to prevent blocking other Python threads.
 
 use pyo3::prelude::*;
 
@@ -83,7 +83,7 @@ impl SteamResource {
     /// ```
     fn run_callbacks(&self, py: Python<'_>) {
         let client = self.client.clone();
-        py.allow_threads(move || {
+        py.detach(|| {
             client.run_callbacks();
         });
     }
@@ -167,7 +167,7 @@ impl SteamResource {
     /// `True` if stats were stored successfully.
     fn store_stats(&self, py: Python<'_>) -> bool {
         let client = self.client.clone();
-        py.allow_threads(move || stats::store_stats(&client))
+        py.detach(move || stats::store_stats(&client))
     }
 
     /// Get an integer stat value.
@@ -438,7 +438,7 @@ impl SteamResource {
     fn cloud_read(&self, py: Python<'_>, filename: &str) -> PyResult<Option<Vec<u8>>> {
         let client = self.client.clone();
         let filename = filename.to_string();
-        py.allow_threads(move || cloud::read_file(&client, &filename))
+        py.detach(move || cloud::read_file(&client, &filename))
     }
 
     /// Write a file to cloud storage.
