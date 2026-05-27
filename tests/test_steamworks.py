@@ -21,6 +21,8 @@ def steam() -> SteamResource:
 
     Skips all tests in the module if Steam is not available.
     """
+    if SteamResource is None:
+        pytest.skip("Steam native library not available")
     try:
         return SteamResource(TEST_APP_ID)
     except RuntimeError as e:
@@ -32,6 +34,8 @@ class TestSteamResourceInit:
 
     def test_init_with_valid_app_id(self) -> None:
         """Test initialization with valid demo app ID."""
+        if SteamResource is None:
+            pytest.skip("Steam native library not available")
         try:
             steam = SteamResource(TEST_APP_ID)
             assert steam is not None
@@ -45,6 +49,8 @@ class TestSteamResourceInit:
         (e.g., steam_appid.txt exists). This test just verifies the call
         doesn't crash the process.
         """
+        if SteamResource is None:
+            pytest.skip("Steam native library not available")
         with contextlib.suppress(RuntimeError):
             SteamResource(0)
 

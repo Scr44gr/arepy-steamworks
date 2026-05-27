@@ -27,7 +27,15 @@ Example:
 
 from __future__ import annotations
 
-from arepy_steamworks._native import SteamResource
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from arepy_steamworks._native import SteamResource as SteamResource
+
+try:
+    from arepy_steamworks._native import SteamResource
+except ImportError:
+    SteamResource = None  # type: ignore[assignment,misc]
 
 __all__ = [
     "CloudFileInfo",
