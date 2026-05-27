@@ -11,67 +11,148 @@ jobs:
   build-wheels:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@v1.51.0
         with:
-          args: --release --out dist --find-interpreter
+          maturin-version: v1.13.3
+          manylinux: 2_28
+          args: --release --out dist --find-interpreter --compatibility pypi
           sccache: "true"
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: dist/
+          path: dist/*.whl
+          if-no-files-found: error
+          compression-level: 0
 
   build-sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build source distribution
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@v1.51.0
         with:
+          maturin-version: v1.13.3
           command: sdist
           args: --out dist
 
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sdist
-          path: dist/
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
 
   publish:
     runs-on: ubuntu-latest
     needs: [build-wheels, build-sdist]
+    environment:
+      name: pypi
+      url: https://pypi.org/p/arepy-steamworks
     permissions:
       id-token: write
 
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v8
         with:
-          path: dist/
-          merge-multiple: true
+          pattern: wheels-*
+          path: dist/artifacts
+
+      - name: Download source distribution
+        uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist/artifacts/sdist
+
+      - name: Stage distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/publish
+          find dist/artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' \) -exec cp {} dist/publish/ \;
+          ls -1 dist/publish
+
+      - name: Set up Python for archive checks
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Validate built archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          EOCD_SIGNATURE = b'PK\x05\x06'
+          LOCAL_FILE_SIGNATURE = b'PK\x03\x04'
+
+
+          def validate_wheel(path: Path) -> None:
+              data = path.read_bytes()
+              if not data.startswith(LOCAL_FILE_SIGNATURE):
+                  raise SystemExit(f'Wheel has unexpected leading data: {path.name}')
+
+              search_start = max(0, len(data) - (65_535 + 22))
+              eocd_offset = data.rfind(EOCD_SIGNATURE, search_start)
+              if eocd_offset == -1:
+                  raise SystemExit(f'Wheel is missing an end-of-central-directory record: {path.name}')
+
+              comment_length = int.from_bytes(data[eocd_offset + 20 : eocd_offset + 22], 'little')
+              expected_size = eocd_offset + 22 + comment_length
+              if comment_length != 0:
+                  raise SystemExit(f'Wheel contains a ZIP comment, which PyPI rejects: {path.name}')
+              if expected_size != len(data):
+                  raise SystemExit(f'Wheel has trailing data after the ZIP directory: {path.name}')
+
+              with zipfile.ZipFile(path) as wheel:
+                  bad_member = wheel.testzip()
+                  if bad_member is not None:
+                      raise SystemExit(f'Corrupt wheel member in {path.name}: {bad_member}')
+
+          dist = Path('dist/publish')
+          files = sorted(dist.iterdir())
+          if not files:
+              raise SystemExit('No distributions were staged for publishing')
+
+          for path in files:
+              if path.suffix == '.whl':
+                validate_wheel(path)
+              elif path.suffixes[-2:] == ['.tar', '.gz']:
+                  with tarfile.open(path, 'r:gz') as sdist:
+                      members = sdist.getmembers()
+                      if not members:
+                          raise SystemExit(f'Empty source distribution: {path.name}')
+              else:
+                  raise SystemExit(f'Unexpected file in publish directory: {path.name}')
+
+          print(f'Validated {len(files)} distribution files for upload.')
+          PY
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist/
+          packages-dir: dist/publish/
