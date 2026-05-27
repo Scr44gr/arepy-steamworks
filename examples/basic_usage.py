@@ -23,9 +23,7 @@ class Score(Component):
         self.value = value
 
 
-def achievement_system(
-    steam: SteamResource, query: Query[Entities, With[Score]]
-) -> None:
+def achievement_system(steam: SteamResource, query: Query[Entities, With[Score]]) -> None:
     """Check player scores and unlock achievements."""
     for entity, score in query.iter_entities_components(Score):
         if score.value >= 100 and steam.unlock_achievement("HIGH_SCORE"):
@@ -34,9 +32,7 @@ def achievement_system(
 
 def main() -> None:
     """Run the Steam integration example."""
-    engine = ArepyEngine(
-        title="Steam Example", width=800, height=600, max_frame_rate=60
-    )
+    engine = ArepyEngine(title="Steam Example", width=800, height=600, max_frame_rate=60)
     world = engine.create_world("game")
 
     try:
@@ -79,9 +75,7 @@ def main() -> None:
 
     except RuntimeError as e:
         print(f"Steam not available: {e}")
-        print(
-            "Make sure Steam is running and you have steam_appid.txt with your app ID"
-        )
+        print("Make sure Steam is running and you have steam_appid.txt with your app ID")
 
 
 if __name__ == "__main__":
