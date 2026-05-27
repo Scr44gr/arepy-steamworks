@@ -5,6 +5,13 @@ __pycache__/
 
 # C extensions
 *.so
+*.pyd
+
+# Steam SDK redistributable (must be obtained by user)
+python/arepy_steamworks/steam_api*.dll
+python/arepy_steamworks/libsteam_api.*
+steam_api*.dll
+steam_api*.lib
 
 # Distribution / packaging
 .Python
