@@ -24,7 +24,7 @@ Repository = "https://github.com/scr44gr/arepy-steamworks"
 Issues = "https://github.com/scr44gr/arepy-steamworks/issues"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.8"]
+dev = ["pytest>=8.0", "ruff>=0.8", "maturin>=1.0,<2.0"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
