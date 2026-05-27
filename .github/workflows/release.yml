@@ -34,7 +34,7 @@ jobs:
           manylinux: 2_28
           args: >-
             --release --out dist
-            -i ${{ startsWith(matrix.os, 'ubuntu') && format('python{0}', matrix.python-version) || 'python' }}
+            -i ${{ runner.os == 'Windows' && format('{0}/python.exe', env.pythonLocation) || format('{0}/bin/python', env.pythonLocation) }}
             --compatibility pypi
           sccache: "true"
 
