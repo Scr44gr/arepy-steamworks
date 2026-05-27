@@ -27,21 +27,47 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Build wheels
+      - name: Build wheel
         uses: PyO3/maturin-action@v1.51.0
         with:
           maturin-version: v1.13.3
           manylinux: 2_28
-          args: --release --out dist --find-interpreter --compatibility pypi
+          args: >-
+            --release --out dist
+            -i ${{ startsWith(matrix.os, 'ubuntu') && format('python{0}', matrix.python-version) || 'python' }}
+            --compatibility pypi
           sccache: "true"
 
-      - name: Upload wheels
+      - name: Write wheel checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          wheel = next(Path("dist").glob("*.whl"))
+          checksum = wheel.with_suffix(wheel.suffix + ".sha256")
+          checksum.write_text(
+              f"{hashlib.sha256(wheel.read_bytes()).hexdigest()}  {wheel.name}\n",
+              encoding="utf-8",
+          )
+          print(f"Wrote {checksum.name}")
+          PY
+
+      - name: Upload wheel
         uses: actions/upload-artifact@v7
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*.whl
+          archive: false
           if-no-files-found: error
-          compression-level: 0
+
+      - name: Upload wheel checksum
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/*.whl.sha256
+          archive: false
+          if-no-files-found: error
 
   build-sdist:
     runs-on: ubuntu-latest
@@ -55,13 +81,36 @@ jobs:
           command: sdist
           args: --out dist
 
+      - name: Write sdist checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          sdist = next(Path("dist").glob("*.tar.gz"))
+          checksum = sdist.with_suffix(sdist.suffix + ".sha256")
+          checksum.write_text(
+              f"{hashlib.sha256(sdist.read_bytes()).hexdigest()}  {sdist.name}\n",
+              encoding="utf-8",
+          )
+          print(f"Wrote {checksum.name}")
+          PY
+
       - name: Upload sdist
         uses: actions/upload-artifact@v7
         with:
-          name: sdist
           path: dist/*.tar.gz
+          archive: false
           if-no-files-found: error
-          compression-level: 0
+
+      - name: Upload sdist checksum
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/*.tar.gz.sha256
+          archive: false
+          if-no-files-found: error
 
   publish:
     runs-on: ubuntu-latest
@@ -76,22 +125,33 @@ jobs:
       - name: Download wheel artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: wheels-*
-          path: dist/artifacts
+          pattern: arepy_steamworks-*.whl
+          path: dist/publish
+          merge-multiple: true
+          skip-decompress: true
 
       - name: Download source distribution
         uses: actions/download-artifact@v8
         with:
-          name: sdist
-          path: dist/artifacts/sdist
+          pattern: arepy_steamworks-*.tar.gz
+          path: dist/publish
+          merge-multiple: true
+          skip-decompress: true
 
-      - name: Stage distributions
+      - name: Download checksums
+        uses: actions/download-artifact@v8
+        with:
+          pattern: arepy_steamworks-*.sha256
+          path: dist/checksums
+          merge-multiple: true
+          skip-decompress: true
+
+      - name: Show staged files
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/publish
-          find dist/artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' \) -exec cp {} dist/publish/ \;
           ls -1 dist/publish
+          ls -1 dist/checksums
 
       - name: Set up Python for archive checks
         uses: actions/setup-python@v6
@@ -104,55 +164,88 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import hashlib
           import tarfile
           import zipfile
 
-          EOCD_SIGNATURE = b'PK\x05\x06'
-          LOCAL_FILE_SIGNATURE = b'PK\x03\x04'
+          EOCD_SIGNATURE = b"PK\x05\x06"
+          LOCAL_FILE_SIGNATURE = b"PK\x03\x04"
+
+
+          def validate_checksum(checksum_path: Path, dist_dir: Path) -> None:
+              line = checksum_path.read_text(encoding="utf-8").strip()
+              expected_hash, filename = line.split("  ", 1)
+              target = dist_dir / filename
+              if not target.exists():
+                  raise SystemExit(
+                      f"Missing distribution for checksum {checksum_path.name}: {filename}"
+                  )
+
+              actual_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+              if actual_hash != expected_hash:
+                  raise SystemExit(f"Checksum mismatch for {filename}")
 
 
           def validate_wheel(path: Path) -> None:
               data = path.read_bytes()
               if not data.startswith(LOCAL_FILE_SIGNATURE):
-                  raise SystemExit(f'Wheel has unexpected leading data: {path.name}')
+                  raise SystemExit(f"Wheel has unexpected leading data: {path.name}")
 
               search_start = max(0, len(data) - (65_535 + 22))
               eocd_offset = data.rfind(EOCD_SIGNATURE, search_start)
               if eocd_offset == -1:
-                  raise SystemExit(f'Wheel is missing an end-of-central-directory record: {path.name}')
+                  raise SystemExit(
+                      f"Wheel is missing an end-of-central-directory record: {path.name}"
+                  )
 
-              comment_length = int.from_bytes(data[eocd_offset + 20 : eocd_offset + 22], 'little')
+              comment_length = int.from_bytes(data[eocd_offset + 20 : eocd_offset + 22], "little")
               expected_size = eocd_offset + 22 + comment_length
               if comment_length != 0:
-                  raise SystemExit(f'Wheel contains a ZIP comment, which PyPI rejects: {path.name}')
+                  raise SystemExit(
+                      f"Wheel contains a ZIP comment, which PyPI rejects: {path.name}"
+                  )
               if expected_size != len(data):
-                  raise SystemExit(f'Wheel has trailing data after the ZIP directory: {path.name}')
+                  raise SystemExit(f"Wheel has trailing data after the ZIP directory: {path.name}")
 
               with zipfile.ZipFile(path) as wheel:
                   bad_member = wheel.testzip()
                   if bad_member is not None:
-                      raise SystemExit(f'Corrupt wheel member in {path.name}: {bad_member}')
+                      raise SystemExit(f"Corrupt wheel member in {path.name}: {bad_member}")
 
-          dist = Path('dist/publish')
-          files = sorted(dist.iterdir())
+
+          dist_dir = Path("dist/publish")
+          checksum_dir = Path("dist/checksums")
+          files = sorted(path for path in dist_dir.iterdir() if path.is_file())
+          checksum_files = sorted(checksum_dir.glob("*.sha256"))
+
           if not files:
-              raise SystemExit('No distributions were staged for publishing')
+              raise SystemExit("No distributions were staged for publishing")
+          if len(files) != len(checksum_files):
+              raise SystemExit(
+                  f"Expected one checksum per distribution, found {len(files)} files and {len(checksum_files)} checksums"
+              )
+
+          for checksum_path in checksum_files:
+              validate_checksum(checksum_path, dist_dir)
 
           for path in files:
-              if path.suffix == '.whl':
-                validate_wheel(path)
-              elif path.suffixes[-2:] == ['.tar', '.gz']:
-                  with tarfile.open(path, 'r:gz') as sdist:
+              if path.suffix == ".whl":
+                  validate_wheel(path)
+              elif path.suffixes[-2:] == [".tar", ".gz"]:
+                  with tarfile.open(path, "r:gz") as sdist:
                       members = sdist.getmembers()
                       if not members:
-                          raise SystemExit(f'Empty source distribution: {path.name}')
+                          raise SystemExit(f"Empty source distribution: {path.name}")
               else:
-                  raise SystemExit(f'Unexpected file in publish directory: {path.name}')
+                  raise SystemExit(f"Unexpected file in publish directory: {path.name}")
 
-          print(f'Validated {len(files)} distribution files for upload.')
+          print(
+              f"Validated {len(files)} distribution files and {len(checksum_files)} checksums for upload."
+          )
           PY
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/publish/
+          print-hash: true
