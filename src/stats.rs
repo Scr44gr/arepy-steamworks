@@ -10,9 +10,9 @@ pub fn unlock_achievement(client: &Client, achievement_id: &str) -> PyResult<boo
     let stats = client.user_stats();
     let achievement = stats.achievement(achievement_id);
 
-    achievement
-        .set()
-        .map_err(|_| SteamError::StatFailed(format!("Failed to set achievement: {}", achievement_id)))?;
+    achievement.set().map_err(|_| {
+        SteamError::StatFailed(format!("Failed to set achievement: {}", achievement_id))
+    })?;
 
     Ok(stats.store_stats().is_ok())
 }
@@ -79,5 +79,8 @@ pub fn set_stat_float(client: &Client, name: &str, value: f32) -> PyResult<()> {
 
 /// Reset all stats to their default values.
 pub fn reset_all_stats(client: &Client, achievements_too: bool) -> bool {
-    client.user_stats().reset_all_stats(achievements_too).is_ok()
+    client
+        .user_stats()
+        .reset_all_stats(achievements_too)
+        .is_ok()
 }
